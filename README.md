@@ -105,10 +105,10 @@ case class CustomerConfig(config: Config)  {
   val dateTable = maestro.partitionedHiveTable[Customer, (String, String, String)] (/*...*/)
   val catTable  = maestro.partitionedHiveTable[Customer, String](/*...*/)
   val queries = List(
-    s""""INSERT OVERWRITE TABLE ${catTable.name} PARTITION (partition_cat)
-       | SELECT id, name, acct, cat, sub_cat, -10, effective_date, cat AS partition_cat
-       | FROM ${dateTable.name}""".stripMargin,
-    s""""SELECT COUNT(*) FROM ${catTable.name}""""
+    s"""INSERT OVERWRITE TABLE ${catTable.name} PARTITION (partition_cat)
+      | SELECT id, name, acct, cat, sub_cat, -10, effective_date, cat AS partition_cat
+      | FROM ${dateTable.name}""".stripMargin,
+    s"""SELECT COUNT(*) FROM ${catTable.name}"""
   )
 }
 
@@ -126,7 +126,7 @@ object CustomerExecution {
   } yield (loadSuccess, count1)
 }
 ```
-(This should be updated to be consistent with issue #295, including the yield.)
+(TODO This should be updated to be consistent with issue #295, including the yield.)
 
 
 Concepts
@@ -139,11 +139,33 @@ to generate out significant supporting infrastructure customized for
 _your_ specific record type. This gives us the ability to refer to fields
 for partitioning, filtering and validation in a way that can be easily
 be checked and validated up front (by the compiler in most circumstances,
-and on start-up before things run in the worst case) and that those field
+and on start-up before things run in the worst case).  Such field
 references can have large amounts of interesting metadata which allows
 us to automatically parse, print, validate, filter, partition the data
 in a way that we _know_ will work before we run the code (for a valid
 schema).
+
+### Execution Monad from Scalding
+
+The type constructor `Execution[T]` is a monad, which roughly means that
+an `Execution[T]` is a provider of items of type `T` in some sense that is
+particular to `Execution`, and that `Execution` providers can be chained
+together.  
+
+Monads are a very general concept, and include many other particular senses
+of "providing" items, such as providing the elements from different forms
+of collections of items like `List[T]`, `Option[T]` and `Seq[T]` and 
+also providers that are allowed to perform different forms of effects prior
+to providing an item like throwing exceptions (`Try[T]`) 
+changing state (`scalaz.effect.ST[T]`) and arbitrary operations including I/O (`scalaz.effect.IO[T]`).  
+
+Using `Execution` doesn't require a deep understanding
+of monads, mostly it just requires chaining some basic executions 
+together to form sequences.
+
+TODO Unfinished - roughly explain the sense in which `Execution[T]` provides items.
+TODO Add references for more info, maybe say less about general monads.
+
 
 ### Tasks
 
