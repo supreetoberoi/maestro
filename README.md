@@ -14,9 +14,9 @@ The `maestro` library is responsible for providing convenient APIs for marshalli
 orchestrating data around for etl type work.
 
 The primary goal of `maestro` is to provide the ability to make it _easy_ to manage
-data sets with out sacrificing safety or robustness. This is achieved by 
-adopting strongly-typed schemas describing the fixed structure of data, and working on
-APIs for manipulating those structures in a sensible way that scales to data-sets
+data sets with out sacrificing safety or robustness. This is achieved via
+strongly-typed schemas describing the fixed structure of data, and working on
+APIs for manipulating those structures in a sensible way that scales to data sets
 with 100s of columns.
 
 [Scaladoc](https://commbank.github.io/maestro/latest/api/index.html)
@@ -80,56 +80,40 @@ important, they should accurately describe the data (and will be used
 to infer how the data should be parsed and validated).
 
 
-### Building a pipeline from the built in tools (via `Execution`)
+### Building an `Execution` pipeline from the built in tools
+
 
 A pipeline is defined via a scalding `Execution`, generally involving
 multiple steps, with each step potentially depending on the results of
 previous steps.  This is often neatly expressed as a Scala
 `for`-`yield` comprehension like in the example below.
 
-The basic steps in a pipeline can include scalding jobs, hive queries,
-sqoop import/export, hdfs operations (very soon) and other `maestro` Executions.
+The steps in a pipeline can include scalding jobs, hive queries,
+sqoop import/export, hdfs operations, other maestro `Executions` and
+various other ways of specifying and combining steps.
 
-An example execution pipeline that loads data via hive follows.
+An example execution pipeline that loads data via hive is the 
+[CustomerExecution](maestro-example/src/main/scala/au/com/cba/omnia/maestro/example/CustomerExecution.scala).
+An extract follows to give the flavour of executions and the their configuration.
 
 ```scala
-import org.apache.hadoop.hive.conf.HiveConf.ConfVars._
-
-import au.com.cba.omnia.maestro.api.exec._
-import au.com.cba.omnia.maestro.api.exec.Maestro._
-import au.com.cba.omnia.maestro.example.thrift.{Account, Customer}
-
 /** Configuration for a customer execution example */
-case class CustomerConfig(config: Config) extends MacroSupport[Customer] {
-  val maestro   = MaestroConfig(
-    conf        = config,
-    source      = "customer",
-    domain      = "customer",
-    tablename   = "customer"
-  )
+case class CustomerConfig(config: Config)  {
+  val maestro   = MaestroConfig(/*...*/)
   val upload    = maestro.upload()
-  val load      = maestro.load(
-    none        = "null"
-  )
-  val dateTable = maestro.partitionedHiveTable[Customer, (String, String, String)](
-    partition   = Partition.byDate(Fields.EffectiveDate),
-    tablename   = "by_date"
-  )
-  val catTable  = maestro.partitionedHiveTable[Customer, String](
-    partition   = Partition.byField(Fields.Cat),
-    tablename   = "by_cat"
-  )
-  val writeToCatTableQuery = QueryConfig(
-    name        = "test",
-    settings    = Map(HIVEMERGEMAPFILES -> "true"),
-    s"INSERT OVERWRITE TABLE ${catTable.name} PARTITION (partition_cat) SELECT id, name, acct, cat, sub_cat, -10, effective_date, cat AS partition_cat FROM ${dateTable.name}",
-    s"SELECT COUNT(*) FROM ${catTable.name}"
+  val load      = maestro.load[Customer](none="null")
+  val dateTable = maestro.partitionedHiveTable[Customer, (String, String, String)] (/*...*/)
+  val catTable  = maestro.partitionedHiveTable[Customer, String](/*...*/)
+  val queries = List(
+    s""""INSERT OVERWRITE TABLE ${catTable.name} PARTITION (partition_cat)
+       | SELECT id, name, acct, cat, sub_cat, -10, effective_date, cat AS partition_cat
+       | FROM ${dateTable.name}""".stripMargin,
+    s""""SELECT COUNT(*) FROM ${catTable.name}""""
   )
 }
 
 /** Customer execution example */
-object CustomerExecution extends MacroSupport[Customer] {
-
+object CustomerExecution {
   /** Create an example customer execution */
   def execute: Execution[(LoadSuccess, Long)] = for {
     conf           <- Execution.getConfig.map(CustomerConfig(_))
@@ -138,173 +122,12 @@ object CustomerExecution extends MacroSupport[Customer] {
     (pipe, ldInfo) <- load[Customer](conf.load, uploadInfo.files)
     loadSuccess    <- ldInfo.withSuccess
     (count1, _)    <- viewHive(conf.dateTable, pipe) zip viewHive(conf.catTable, pipe)
-    _              <- hiveQuery(conf.writeToCatTableQuery)
+    _              <- Execution.fromHive(Hive.queries(conf.queries), /*...*/)
   } yield (loadSuccess, count1)
 }
 ```
+(This should be updated to be consistent with issue #295, including the yield.)
 
-### Building a cascade pipeline from the built in tools (pre-`Execution`)
-
-A pipeline is defined in terms of a `cascade`. This terminology comes
-from the underlying technology used, but it is easier to think of it
-as a set of jobs (with an implied partial-ordering, based on data
-dependencies).
-
-A cascade can be made up of scalding jobs, hive queries (future),
-shell commands, or `maestro` tasks. The hope is that most pipelines
-can be implemented with _just_ `maestro`, and the corner cases can
-be easily handled by hive or raw scalding jobs.
-
-A pipeline built only from `maestro` tasks.
-
-```scala
-import com.twitter.scalding._
-import au.com.cba.omnia.maestro._
-import au.com.cba.omnia.etl.customer.thrift._
-
-class CustomerCascade(args: Args) extends CascadeJob(args) with MaestroSupport[Customer] {
-  val maestro = Maestro(args)
-
-  val delimiter     = "|$|"
-  val env           = args("env")
-  val domain        = "CUSTOMER"
-  val input         = s"${env}/source/${domain}"
-  val clean         = s"${env}/processing/${domain}"
-  val outbound      = s"${env}/outbound/${domain}"
-  val dateView      = s"${env}/view/warehouse/${domain}/by-date"
-  val catView       = s"${env}/view/warehouse/${domain}/by-category"
-  val features      = s"${env}/view/features/ivory"
-  val errors        = s"${env}/errors/${domain}"
-  val now           = yyyyMMdd.format(new java.util.Date)
-  val byDate        = Partition.byDate(Fields.EFFECITVE_DATE)
-  val byCategory    = Partition.byFields(Field.CUSTOMER_CAT, Fields.CUSTOMER_SUB_CAT)
-  val filters       = Filter.exclude(Fields.EFFECTIVE_DATE)
-  val cleaners      = Clean.all(
-    Clean.trim
-  )
-  val validators    = Validator.all(
-  )
-  val filter        = RowFilter.keep
-
-  def jobs = List(
-    maestro.load[Customer](delimiter, input, clean, errors, now, cleaners, validators, filter),
-    maestro.view(byDate, clean, dateView),
-    maestro.view(byCategory, clean, catView),
-    maestro.ivory(clean, features),
-    maestro.sqoop(clean, output, filters)
-  )
-}
-```
-
-Hive
-----
-
-Maestro allows you to write directly to Hive tables and to run queries on Hive tables as part of a
-Maestro job.
-
-Create a `HiveTable` to describe/reference a specific hive table. This is required by the other hive
-related methods as identifier. The `source` and `sink` methods on the `HiveTable` provide Scalding
-sources and sinks for typed pipes to read from or write to. `name` provides a fully qualifed name
-that can be used inside hql.
-
-`viewHive` allows the Maestro job to write out the data to a partitioned hive table in parquet
-similar to `view`. However, it also creates the hive table if it doesn't already exist. Otherwise,
-it just verifies the schema.
-
-`hiveQuery` enables the running of a hive query as part of the Maestro job. Apart from the query
-string it also expects a list of input hive tables and optionally an output table. This is required
-for Maestro to properly schedule interdependent flows. It is solely use for scheduling and has no
-effect on the query itself. In order to run a hive query the Maestro job needs to extend
-`MaestroCascade`. See the example for more details.
-
-### Limitations
-
-Currently it is not possible for our implementation to read in data from the partition columns.
-Instead it is expected that all the data is solely contained inside the core columns of the table
-itself. It is, therefore, not possible to partition on the same column as a field of the thrift
-struct (instead a duplicate column with a different name is required). Partition columns can only
-be used for hive performance reasons and not to carry information.
-
-In order for the job to work the hive-site.xml needs to be on the classpath when the job is
-initiated and on every node.
-
-### Known issues
-
-* Writing out hive files currently only works if the metastore is specified as thrift endpoint
-  instead of database.
-  ```
-    <property>
-      <name>hive.metastore.uris</name>
-      <value>thrift://metastore:9083</value>
-    </property>
-    ```
-* In order to run queries the hive-site.xml need to include the `yarn.resourcemanager.address`
-  property even if the value is bogus.
-  ```
-    <property>
-      <name>yarn.resourcemanager.address</name>
-      <value>bogus</value>
-    </property>
-  ```
-* In order to run queries with partitioning the partition mode needs to be set to nonstrict.
-  ```
-    <property>
-      <name>hive.exec.dynamic.partition.mode</name>
-      <value>nonstrict</value>
-    </property>
-  ```
-
-You can start with the [example hive-site.xml](doc/hive-site.xml).  To use this either
-install it on your cluster, or
-add it to your project's resources directory so that it is included in your jar.
-
-For an example, see the earlier quick start execution pipeline example.
-
-### Example (old pre-`Execution` version)
-
-```scala
-import scalaz.{Tag => _, _}, Scalaz._
-
-import com.twitter.scalding._, TDsl._
-
-import org.apache.hadoop.hive.conf.HiveConf
-
-import au.com.cba.omnia.maestro.api._, Maestro._
-import au.com.cba.omnia.maestro.core.codec._
-import au.com.cba.omnia.maestro.example.thrift._
-
-class CustomerCascade(args: Args) extends MaestroCascade[Customer](args) {
-  val env           = args("env")
-  val domain        = "customer"
-  val inputs        = Guard.expandPaths(s"${env}/source/${domain}/*")
-  val errors        = s"${env}/errors/${domain}"
-  val conf          = new HiveConf
-  val validators    = Validator.all[Customer]()
-  val filter        = RowFilter.keep
-  val cleaners      = Clean.all(
-    Clean.trim,
-    Clean.removeNonPrintables
-  )
-
-  val dateTable =
-    HiveTable(domain, "by_date", Partition.byDate(Fields.EffectiveDate) )
-  val idTable =
-    HiveTable(domain, "by_id", Partition(List("id"), Fields.Id.get, "%s"))
-  val jobs = Seq(
-    new UniqueJob(args) {
-      load[Customer]("|", inputs, errors, Maestro.now(), cleaners, validators, filter) |>
-      (viewHive(dateTable, conf) _ &&&
-        viewHive(idTable, conf)
-      )
-    },
-    hiveQuery(
-      args, "test",
-      s"INSERT OVERWRITE TABLE ${idTable.name} PARTITION (id) SELECT id, name, acct, cat, sub_cat, -10, effective_date FROM ${dateTable.name}",
-      List(dateTable, idTable), None, conf
-    )
-  )
-}
-```
 
 Concepts
 --------
@@ -398,6 +221,67 @@ Validator.all(
 | i64: A 64-bit signed integer                      | BIGINT (8-byte signed integer, from -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807)  | BigInteger    |
 | double: A 64-bit floating point number            | DOUBLE (8-byte double precision floating point number)                                        | double        |
 | string: Encoding agnostic text or binary string   | string 
+
+### Hive
+
+Maestro allows you to write directly to Hive tables and to run queries on Hive tables as part of a
+Maestro job.
+
+Create a `HiveTable` to describe/reference a specific hive table. This is required by the other hive
+related methods as identifier. The `source` and `sink` methods on the `HiveTable` provide Scalding
+sources and sinks for typed pipes to read from or write to. `name` provides a fully qualifed name
+that can be used inside hql.
+
+`viewHive` allows the Maestro job to write out the data to a partitioned hive table in parquet
+similar to `view`. However, it also creates the hive table if it doesn't already exist. Otherwise,
+it just verifies the schema.
+
+`hiveQuery` enables the running of a hive query as part of the Maestro job. Apart from the query
+string it also expects a list of input hive tables and optionally an output table. This is required
+for Maestro to properly schedule interdependent flows. It is solely use for scheduling and has no
+effect on the query itself. In order to run a hive query the Maestro job needs to extend
+`MaestroCascade`. See the example for more details.
+
+### Limitations
+
+Currently it is not possible for our implementation to read in data from the partition columns.
+Instead it is expected that all the data is solely contained inside the core columns of the table
+itself. It is, therefore, not possible to partition on the same column as a field of the thrift
+struct (instead a duplicate column with a different name is required). Partition columns can only
+be used for hive performance reasons and not to carry information.
+
+In order for the job to work the hive-site.xml needs to be on the classpath when the job is
+initiated and on every node.
+
+### Known issues
+
+* Writing out hive files currently only works if the metastore is specified as thrift endpoint
+  instead of database.
+  ```
+    <property>
+      <name>hive.metastore.uris</name>
+      <value>thrift://metastore:9083</value>
+    </property>
+    ```
+* In order to run queries the hive-site.xml need to include the `yarn.resourcemanager.address`
+  property even if the value is bogus.
+  ```
+    <property>
+      <name>yarn.resourcemanager.address</name>
+      <value>bogus</value>
+    </property>
+  ```
+* In order to run queries with partitioning the partition mode needs to be set to nonstrict.
+  ```
+    <property>
+      <name>hive.exec.dynamic.partition.mode</name>
+      <value>nonstrict</value>
+    </property>
+  ```
+
+You can start with the [example hive-site.xml](doc/hive-site.xml).  To use this either
+install it on your cluster, or
+add it to your project's resources directory so that it is included in your jar.
 
 ### Advanced tips & tricks
 
