@@ -130,7 +130,14 @@ object SqoopImportExecutionSpec
 
   def endToEndImportWithTeradataResetConnMan = {
     SqoopExecutionTest.setupEnv(customConnMan=Some(""))
-    endToEndImportWithSuccess
+    val config = SqoopImportConfig(hdfsLandingPath, hdfsArchivePath, timePath, teradataOptions)
+    val (path, count) = executesSuccessfully(sqoopImport(config))
+    facts(
+      ImportPathFact(path),
+      s"$hdfsLandingPath/$timePath" </> "part-m-00000" ==> lines(data),
+      s"$hdfsArchivePath/$timePath" </> "part-00000.gz" ==> records(compressedRecordReader, data)
+    )
+    count must_== 3
   }
 
   def doubleImport = {
