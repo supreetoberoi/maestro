@@ -82,17 +82,19 @@ to infer how the data should be parsed and validated).
 
 ### Building a `maestro` job
 
+The core of most ETL jobs can be implemented just using few calls to `maestro`, but it is also
+designed to easily accommodate custom code, including code using the raw APIs involved
+like scalding, hive and sqoop.
+
 A `maestro` job is defined via an `Execution` 
 (see [scalding](https://github.com/twitter/scalding)), generally involving
-multiple steps, with each step potentially depending on the results of
-previous steps.  This is often neatly expressed as a Scala
-`for`-`yield` comprehension like in the example below.
+multiple steps, with each step being an `Execution` itself and potentially 
+depending on the results of previous steps.  This is often neatly expressed as a 
+Scala `for`-`yield` comprehension like in the example below.
 
-These steps can include hive queries,
-sqoop import/export, hdfs operations, other `Execution`s, scalding jobs and
-various other convenient ways of specifying and combining steps.
-The intention is that most jobs can be implemented with _just_ `maestro`, while also
-making it easy to use raw scalding, hive, etc., for special situations.
+`maestro` includes convenient ways to construct `Execution` steps from
+hive queries, sqoop import/export, hdfs operations, scalding pipes and
+various other convenient ways of specifying operations and combining steps.
 
 An example `maestro` job that loads data via hive is the 
 [CustomerExecution](maestro-example/src/main/scala/au/com/cba/omnia/maestro/example/CustomerExecution.scala).
@@ -115,9 +117,9 @@ case class CustomerConfig(config: Config)  {
 }
 
 /** Customer execution example */
-object CustomerExecution {
+object CustomerJob extends MaestroJob {
   /** Create an example customer execution */
-  def execute: Execution[(LoadSuccess, Long)] = for {
+  def job: Execution[JobStatus] = for {
     conf           <- Execution.getConfig.map(CustomerConfig(_))
     uploadInfo     <- upload(conf.upload)
     sources        <- uploadInfo.withSources
@@ -125,7 +127,8 @@ object CustomerExecution {
     loadSuccess    <- ldInfo.withSuccess
     (count1, _)    <- viewHive(conf.dateTable, pipe) zip viewHive(conf.catTable, pipe)
     _              <- Execution.fromHive(Hive.queries(conf.queries), /*...*/)
-  } yield (loadSuccess, count1)
+  } yield (JobFinished)
+  /*...*/
 }
 ```
 (TODO This should be updated to be consistent with issue #295, including the yield.)
