@@ -80,19 +80,21 @@ important, they should accurately describe the data (and will be used
 to infer how the data should be parsed and validated).
 
 
-### Building an `Execution` pipeline from the built in tools
+### Building a `maestro` job
 
-
-A pipeline is defined via a scalding `Execution`, generally involving
+A `maestro` job is defined via an `Execution` 
+(see [scalding](https://github.com/twitter/scalding)), generally involving
 multiple steps, with each step potentially depending on the results of
 previous steps.  This is often neatly expressed as a Scala
 `for`-`yield` comprehension like in the example below.
 
-The steps in a pipeline can include scalding jobs, hive queries,
-sqoop import/export, hdfs operations, other maestro `Executions` and
-various other ways of specifying and combining steps.
+These steps can include hive queries,
+sqoop import/export, hdfs operations, other `Execution`s, scalding jobs and
+various other convenient ways of specifying and combining steps.
+The intention is that most jobs can be implemented with _just_ `maestro`, while also
+making it easy to use raw scalding, hive, etc., for special situations.
 
-An example execution pipeline that loads data via hive is the 
+An example `maestro` job that loads data via hive is the 
 [CustomerExecution](maestro-example/src/main/scala/au/com/cba/omnia/maestro/example/CustomerExecution.scala).
 An extract follows to give the flavour of executions and the their configuration.
 
