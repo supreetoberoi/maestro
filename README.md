@@ -10,14 +10,16 @@ maestro
 maestro: a distinguished conductor
 ```
 
-The `maestro` library is responsible for providing convenient APIs for marshalling and
-orchestrating data around for etl type work.
+The `maestro` library provides convenient marshalling and
+orchestration of data for ETL type work by providing a common framework
+for conducting jobs involving combinations of multiple data APIs.
 
-The primary goal of `maestro` is to provide the ability to make it _easy_ to manage
-data sets with out sacrificing safety or robustness. This is achieved via
-strongly-typed schemas describing the fixed structure of data, and working on
-APIs for manipulating those structures in a sensible way that scales to data sets
-with 100s of columns.
+The primary goal of `maestro` is to provide the ability to make it
+_easy_ to manage data sets with out sacrificing safety or
+robustness. This is achieved by sticking with strongly-typed schemas
+describing the fixed structure of data, and providing APIs for
+manipulating those structures in a sensible way that scales to data
+sets with 100s of columns.
 
 [Scaladoc](https://commbank.github.io/maestro/latest/api/index.html)
 
@@ -83,8 +85,8 @@ to infer how the data should be parsed and validated).
 ### Building a `maestro` job
 
 The core of most ETL jobs can be implemented just using few calls to `maestro`, but it is also
-designed to easily accommodate custom code, including code using the raw APIs involved
-like scalding, hive and sqoop.
+designed to easily accommodate custom code, including code using raw APIs
+like scalding, hive, hdfs and sqoop.
 
 A `maestro` job is defined via an `Execution` 
 (see [scalding](https://github.com/twitter/scalding)), generally involving
@@ -139,83 +141,35 @@ Concepts
 
 ### Maestro
 
-`Maestro` uses the metadata available from the thrift definition
+`Maestro` will use the metadata available from the thrift definition
 to generate out significant supporting infrastructure customized for
-_your_ specific record type. This gives us the ability to refer to fields
+_your_ specific record type. This will give us the ability to refer to fields
 for partitioning, filtering and validation in a way that can be easily
 be checked and validated up front (by the compiler in most circumstances,
 and on start-up before things run in the worst case).  Such field
-references can have large amounts of interesting metadata which allows
-us to automatically parse, print, validate, filter, partition the data
-in a way that we _know_ will work before we run the code (for a valid
-schema).
+references can have large amounts of interesting metadata which
+eventually should allow us to automatically parse, print, validate, filter,
+partition the data in a way that we _know_ will work before we run the code
+(for a valid schema).
 
-### Execution Monad from Scalding
+### `Execution` monad (see the scalding [trait](http://twitter.github.io/scalding/#com.twitter.scalding.Execution) and [object](http://twitter.github.io/scalding/#com.twitter.scalding.Execution$))
+
+An `Execution[T]` represents some work that can be performed that
+provides an item of type `T` if it succeeds, otherwise it fails.  The
+work can involve hadoop map-reduce jobs via scalding, including counters, and caching
+of results is performed when appropriate.  Many `Execution`s can be chained
+together using a `for`-`yield`-comprehension (ultimately via `flatMap`,
+see this [FAQ](http://docs.scala-lang.org/tutorials/FAQ/yield.html)) like in
+the example above.
 
 The type constructor `Execution[T]` is a monad, which roughly means that
-an `Execution[T]` is a provider of items of type `T` in some sense that is
-particular to `Execution`, and that `Execution` providers can be chained
-together.  
+an `Execution[T]` is a provider of items of type `T` in some sense particular to
+`Execution` and that `Execution`s can be chained together.  Monads are a very
+general concept, and include many other particular
+senses of "providing" items, including providing elements from collections.
+This is why `for`-`yield`-comprehensions have the same structure for both collections
+and `Execution`s.
 
-Monads are a very general concept, and include many other particular senses
-of "providing" items, such as providing the elements from different forms
-of collections of items like `List[T]`, `Option[T]` and `Seq[T]` and 
-also providers that are allowed to perform different forms of effects prior
-to providing an item like throwing exceptions (`Try[T]`) 
-changing state (`scalaz.effect.ST[T]`) and arbitrary operations including I/O (`scalaz.effect.IO[T]`).  
-
-Using `Execution` doesn't require a deep understanding
-of monads, mostly it just requires chaining some basic executions 
-together to form sequences.
-
-TODO Unfinished - roughly explain the sense in which `Execution[T]` provides items.
-TODO Add references for more info, maybe say less about general monads.
-
-
-### Tasks
-
-Tasks are not a concrete concept, it is just a name used to indicate that a
-function returns a scalding job for integration into a cascade. Tasks differ
-from raw Jobs in that they rely on the metadata generated by `Maestro`
-and can generally only by executed via their scala api and are not intended to
-be standalone jobs that would be run by themselves.
-
-### Partitioners
-
-Partitioners are really simple. Partitioners are just a list of fields to
-partition a data set by.
-
-The primary api is the list of fields you want to partition on:
-
-```scala
-Partiton.byFields(Fields.CUSTOMER_CAT, Fields.CUSTOMER_SUB_CAT)
-```
-
-The api also has special support for dates of the `yyyy-MM-dd` form:
-
-```scala
-Partiton.byDate(Fields.EFFECTIVE_DATE)
-```
-
-This will use that field, but split the partitioning into 3 parts of
-yyyy, MM and dd.
-
-
-### Filters
-
-Filters again are really simple (hopefully). By default filters
-allow everything. A filter can then be refined via either
-blacklists (i.e. exclude these columns) or whitelists (i.e.
-only include these columns).
-
-Examples:
-```scala
- // everything except effective date
-Filter.exclude(Fields.EFFECTIVE_DATE)
-
- // _only_ effective date and customer id
-Filter.include(Fields.EFFECTIVE_DATE, Fields.CUSTOMER_ID)
-```
 
 ### Validators
 
@@ -249,25 +203,69 @@ Validator.all(
 | double: A 64-bit floating point number            | DOUBLE (8-byte double precision floating point number)                                        | double        |
 | string: Encoding agnostic text or binary string   | string 
 
+[TODO: Update the above.  Maybe include complex types.]
+
 ### Hive
 
 Maestro allows you to write directly to Hive tables and to run queries on Hive tables as part of a
 Maestro job.
 
-Create a `HiveTable` to describe/reference a specific hive table. This is required by the other hive
-related methods as identifier. The `source` and `sink` methods on the `HiveTable` provide Scalding
-sources and sinks for typed pipes to read from or write to. `name` provides a fully qualifed name
-that can be used inside hql.
-
 `viewHive` allows the Maestro job to write out the data to a partitioned hive table in parquet
 similar to `view`. However, it also creates the hive table if it doesn't already exist. Otherwise,
 it just verifies the schema.
 
-`hiveQuery` enables the running of a hive query as part of the Maestro job. Apart from the query
-string it also expects a list of input hive tables and optionally an output table. This is required
-for Maestro to properly schedule interdependent flows. It is solely use for scheduling and has no
-effect on the query itself. In order to run a hive query the Maestro job needs to extend
-`MaestroCascade`. See the example for more details.
+`Execution.fromHive` enables the running of a hive query as part of
+the Maestro job, via the `Hive[T]` monad, which is similar to the
+`Execution[T]` monad but specifically for hive operations.  The basic
+hive operations provided include creating tables, as well as hive
+queries which generally yield lists of strings, one for each row.
+There are other basic operations, including failing depending on
+different kinds of conditions and various ways to build up more
+complex hive operations.
+
+Alternatively you can create a `HiveTable` to describe/reference a specific hive table.
+The `source` and `sink` methods on the `HiveTable` provide Scalding
+sources and sinks for typed pipes to read from or write to. `name` provides a fully qualifed name
+that can be used inside hql.
+
+
+### Hdfs
+
+Maestro provides support for Hdfs operations similar to the support for Hive operations
+described above.
+
+### Partitioners
+
+Partitioners are really simple. Partitioners are just a list of fields to
+partition a data set by.
+
+The primary api is the list of fields you want to partition on:
+
+```scala
+Partiton.byFields(Fields.CUSTOMER_CAT, Fields.CUSTOMER_SUB_CAT)
+```
+
+The api also has support for custom date formats, and
+special support for dates of the `yyyy-MM-dd` form:
+
+```scala
+Partiton.byDate(Fields.EFFECTIVE_DATE)
+```
+
+This will use that field, but split the partitioning into 3 parts of
+yyyy, MM and dd.
+
+
+### Row filters, cleaners, splitters, transformers
+
+[TBD]
+
+
+### Macros
+
+[TBD]
+
+
 
 ### Limitations
 
